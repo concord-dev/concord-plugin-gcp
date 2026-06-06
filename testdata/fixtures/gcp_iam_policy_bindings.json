@@ -1,0 +1,4 @@
+[
+  { "full_name": "projects/acme-prod//roles/owner",  "compliant": true,  "detail": {"members": ["group:platform@acme.com"]} },
+  { "full_name": "projects/acme-prod//roles/editor", "compliant": false, "reason": "allUsers granted editor", "detail": {"members": ["allUsers"]} }
+]

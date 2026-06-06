@@ -1,0 +1,3 @@
+[
+  { "full_name": "projects/acme-prod/sinks/audit-to-bq", "compliant": true,  "detail": {"destination": "bigquery.googleapis.com/projects/acme-prod/datasets/audit"} }
+]

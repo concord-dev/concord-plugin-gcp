@@ -1,0 +1,4 @@
+[
+  { "full_name": "projects/acme-prod/buckets/logs",     "compliant": true,  "detail": {"public_access_prevention": "enforced"} },
+  { "full_name": "projects/acme-prod/buckets/raw-data", "compliant": false, "reason": "public-access prevention not enforced", "detail": {"public_access_prevention": "inherited"} }
+]

@@ -1,0 +1,4 @@
+[
+  { "full_name": "projects/acme-prod/locations/global/keyRings/r/cryptoKeys/k1", "compliant": true,  "detail": {"rotation_period_days": 90, "last_rotation_at": "2026-04-01T00:00:00Z"} },
+  { "full_name": "projects/acme-prod/locations/global/keyRings/r/cryptoKeys/k2", "compliant": false, "reason": "no rotation policy set" }
+]
