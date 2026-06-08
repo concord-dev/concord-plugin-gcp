@@ -1,51 +1,40 @@
 # concord-plugin-gcp
 
-Concord collector for Google Cloud Platform. Built on plugin SDK v2.
+Concord collector for Google Cloud Platform. v0.2.0 uses **real
+`cloud.google.com/go` SDKs** + `google.golang.org/api`; fixture mode is
+kept as the offline / CI fallback.
 
 ## Evidence types
 
-| Type | Surface |
+| Type | What it actually does in live mode |
 |---|---|
-| `gcp_iam_policy_bindings` | IAM allow-policy bindings on a project (or folder) |
-| `gcp_storage_bucket_iam` | Per-bucket public-access state |
-| `gcp_kms_key_rotation` | KMS key rotation policy + last rotation time |
-| `gcp_log_sink` | Project-level audit-log sinks + destinations |
+| `gcp_iam_policy_bindings` | `projects.GetIamPolicy` (Resource Manager v3). Flags bindings granted to `allUsers` / `allAuthenticatedUsers`, and primitive roles (`roles/owner`, `roles/editor`). |
+| `gcp_storage_bucket_iam` | `storage.Buckets.list` then `bucket.IAM().V3().Policy` per bucket. Flags buckets where `PublicAccessPrevention != enforced`, UBLA is off, or IAM grants `allUsers` / `allAuthenticatedUsers`. |
+| `gcp_kms_key_rotation` | `kms.ListKeyRings` × `kms.ListCryptoKeys` across `params.locations` (default `["global"]`). Flags `ENCRYPT_DECRYPT` keys with rotation > `params.max_rotation_days` (default 90), missing rotation policy, or overdue rotation. |
+| `gcp_log_sink` | `logadmin.Sinks` — flags the absence of any sink for the project. |
 
 Each handler emits the canonical resource envelope:
 
 ```json
 {
-  "fetched_at": "2026-06-06T20:00:00Z",
+  "fetched_at": "2026-06-08T20:00:00Z",
   "project": "my-project",
   "resources": [
-    { "full_name": "projects/p/buckets/logs", "compliant": true,  "reason": "", "detail": {...} },
-    { "full_name": "projects/p/buckets/x",    "compliant": false, "reason": "public-access prevention not enforced" }
+    { "full_name": "projects/p/buckets/logs", "compliant": true,  "detail": {...} },
+    { "full_name": "projects/p/buckets/x",    "compliant": false, "reason": "public-access prevention is not enforced" }
   ]
 }
 ```
 
-`detail` is type-specific (e.g. binding members for IAM, retention seconds for log sinks).
-
-## Install
-
-```sh
-git clone https://github.com/concord-dev/concord-plugin-gcp.git
-cd concord-plugin-gcp
-make install
-```
-
 ## Auth
 
-Live GCP calls use Application Default Credentials. Set
-`GOOGLE_APPLICATION_CREDENTIALS` to a service-account JSON path. The
-plugin only ever needs read-only roles
-(`roles/iam.securityReviewer`, `roles/storage.legacyBucketReader`,
-`roles/cloudkms.viewer`, `roles/logging.viewer`).
+| Env var | Required | Notes |
+|---|---|---|
+| `GOOGLE_APPLICATION_CREDENTIALS` | live mode | Service-account JSON path. Read-only roles suffice: `roles/iam.securityReviewer`, `roles/storage.legacyBucketReader`, `roles/cloudkms.viewer`, `roles/logging.viewer`. |
+| `CONCORD_GCP_FIXTURE_DIR` | offline / CI | When set, reads `<type>.json` from this directory |
 
-For offline development and CI, point `CONCORD_GCP_FIXTURE_DIR` at a
-directory of JSON files named after the evidence type
-(`gcp_storage_bucket_iam.json`, etc). Each fixture file is the raw
-`resources:` array.
+`Probe()` calls `Projects.Search` with page size 1 so misconfigured ADC
+fails at plugin start, not at first collection.
 
 ## Wire to a control
 
@@ -66,9 +55,7 @@ spec:
         project: acme-prod
 ```
 
-## Live calls vs fixtures
+## Status
 
-v0.1.0 ships the SDK shape and fixture-driven flows so packs can ship
-real fixtures right away. The live GCP SDK wiring lands in v0.2.0 — the
-evidence shape is forward-compatible, so controls written against v0.1.0
-fixtures keep working without changes.
+- v0.1.0 — fixture mode only (stub release; do not use in production)
+- v0.2.0 — **real cloud.google.com/go SDK**, IAM + GCS + KMS + Log Sinks ← current
