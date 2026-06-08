@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -37,18 +39,20 @@ const (
 	envFixture     = "CONCORD_GCP_FIXTURE_DIR"
 
 	defaultMaxRotationDays = 90
+	maxResources           = 5000
 )
 
 var primitiveRoles = map[string]bool{
 	"roles/owner":  true,
 	"roles/editor": true,
-	"roles/viewer": true,
 }
 
 var publicMembers = map[string]bool{
 	"allUsers":              true,
 	"allAuthenticatedUsers": true,
 }
+
+var auditLogFilterRE = regexp.MustCompile(`(?i)logName\s*[:=]?\s*"?[^"\s]*cloudaudit\.googleapis\.com`)
 
 type gcpCollector struct{}
 
@@ -64,10 +68,10 @@ func (gcpCollector) Probe(ctx context.Context) error {
 	}
 	svc, err := cloudresourcemanager.NewService(ctx, option.WithScopes(cloudresourcemanager.CloudPlatformReadOnlyScope))
 	if err != nil {
-		return fmt.Errorf("gcp: probe failed: %w", err)
+		return fmt.Errorf("creating resourcemanager service: %w", err)
 	}
 	if _, err := svc.Projects.Search().PageSize(1).Context(ctx).Do(); err != nil {
-		return fmt.Errorf("gcp: probe failed: %w", err)
+		return fmt.Errorf("probing resourcemanager: %w", err)
 	}
 	return nil
 }
@@ -77,7 +81,7 @@ func (gcpCollector) Handlers() []plugin.TypeHandler {
 		{Type: typeIAMBindings, Description: "IAM allow-policy bindings for a project; flags public + primitive-role grants", Handle: handleIAMBindings},
 		{Type: typeStorageIAM, Description: "GCS bucket IAM + PublicAccessPrevention + UBLA", Handle: handleStorageIAM},
 		{Type: typeKMSRotation, Description: "KMS CryptoKey rotation policy + next-rotation time", Handle: handleKMSRotation},
-		{Type: typeLogSink, Description: "Cloud Logging sinks for the project", Handle: handleLogSink},
+		{Type: typeLogSink, Description: "Cloud Logging sinks; flags absence of an audit-log-capturing sink", Handle: handleLogSink},
 	}
 }
 
@@ -86,18 +90,22 @@ func handleIAMBindings(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	if items, ok := loadFixture(ref); ok {
+	items, ferr := loadFixture(ref)
+	if ferr != nil {
+		return nil, ferr
+	}
+	if items != nil {
 		return wrap(items, project), nil
 	}
 	svc, err := cloudresourcemanager.NewService(ctx, option.WithScopes(cloudresourcemanager.CloudPlatformReadOnlyScope))
 	if err != nil {
-		return nil, fmt.Errorf("gcp: resourcemanager.NewService: %w", err)
+		return nil, fmt.Errorf("creating resourcemanager service: %w", err)
 	}
 	policy, err := svc.Projects.GetIamPolicy("projects/"+project, &cloudresourcemanager.GetIamPolicyRequest{
 		Options: &cloudresourcemanager.GetPolicyOptions{RequestedPolicyVersion: 3},
 	}).Context(ctx).Do()
 	if err != nil {
-		return nil, fmt.Errorf("gcp: projects.GetIamPolicy: %w", err)
+		return nil, fmt.Errorf("getting project IAM policy: %w", err)
 	}
 	out := make([]resource, 0, len(policy.Bindings))
 	for _, b := range policy.Bindings {
@@ -119,14 +127,11 @@ func handleIAMBindings(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 
 func classifyBinding(role string, members []string) (bool, string) {
 	for _, m := range members {
-		bare := strings.TrimPrefix(m, "user:")
-		bare = strings.TrimPrefix(bare, "group:")
-		bare = strings.TrimPrefix(bare, "serviceAccount:")
-		if publicMembers[m] || publicMembers[bare] {
+		if publicMembers[m] {
 			return false, fmt.Sprintf("role %s granted to public principal %s", role, m)
 		}
 	}
-	if primitiveRoles[role] && role != "roles/viewer" {
+	if primitiveRoles[role] {
 		return false, fmt.Sprintf("primitive role %s in use; prefer least-privilege predefined roles", role)
 	}
 	return true, ""
@@ -137,12 +142,16 @@ func handleStorageIAM(ctx context.Context, ref plugin.EvidenceRef) (any, error) 
 	if err != nil {
 		return nil, err
 	}
-	if items, ok := loadFixture(ref); ok {
+	items, ferr := loadFixture(ref)
+	if ferr != nil {
+		return nil, ferr
+	}
+	if items != nil {
 		return wrap(items, project), nil
 	}
 	client, err := storage.NewClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: storage.NewClient: %w", err)
+		return nil, fmt.Errorf("creating storage client: %w", err)
 	}
 	defer client.Close()
 
@@ -154,23 +163,19 @@ func handleStorageIAM(ctx context.Context, ref plugin.EvidenceRef) (any, error) 
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("gcp: buckets.list: %w", err)
+			return nil, fmt.Errorf("listing buckets: %w", err)
 		}
-		policy, perr := client.Bucket(attrs.Name).IAM().V3().Policy(ctx)
-		var members []string
-		if perr == nil {
-			seen := map[string]bool{}
-			for _, b := range policy.Bindings {
-				for _, m := range b.Members {
-					if !seen[m] {
-						members = append(members, m)
-						seen[m] = true
-					}
-				}
-			}
-			sort.Strings(members)
+		members, policyErr := bucketIAMMembers(ctx, client, attrs.Name)
+		var (
+			compliant bool
+			reason    string
+		)
+		if policyErr != nil {
+			compliant = false
+			reason = fmt.Sprintf("reading bucket IAM failed: %v", policyErr)
+		} else {
+			compliant, reason = classifyBucket(attrs, members)
 		}
-		compliant, reason := classifyBucket(attrs, members)
 		out = append(out, resource{
 			FullName:  fmt.Sprintf("projects/%s/buckets/%s", project, attrs.Name),
 			Compliant: compliant,
@@ -182,11 +187,31 @@ func handleStorageIAM(ctx context.Context, ref plugin.EvidenceRef) (any, error) 
 				"members":                     members,
 			},
 		})
-		if len(out) > 5000 {
+		if len(out) >= maxResources {
 			break
 		}
 	}
 	return wrap(out, project), nil
+}
+
+func bucketIAMMembers(ctx context.Context, client *storage.Client, bucket string) ([]string, error) {
+	policy, err := client.Bucket(bucket).IAM().V3().Policy(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var members []string
+	for _, b := range policy.Bindings {
+		for _, m := range b.Members {
+			if seen[m] {
+				continue
+			}
+			seen[m] = true
+			members = append(members, m)
+		}
+	}
+	sort.Strings(members)
+	return members, nil
 }
 
 func classifyBucket(attrs *storage.BucketAttrs, members []string) (bool, string) {
@@ -209,7 +234,11 @@ func handleKMSRotation(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 	if err != nil {
 		return nil, err
 	}
-	if items, ok := loadFixture(ref); ok {
+	items, ferr := loadFixture(ref)
+	if ferr != nil {
+		return nil, ferr
+	}
+	if items != nil {
 		return wrap(items, project), nil
 	}
 	maxRotation := time.Duration(evidence.Int(ref.Params, "max_rotation_days", defaultMaxRotationDays)) * 24 * time.Hour
@@ -217,7 +246,7 @@ func handleKMSRotation(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 
 	client, err := kms.NewKeyManagementClient(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: kms.NewKeyManagementClient: %w", err)
+		return nil, fmt.Errorf("creating kms client: %w", err)
 	}
 	defer client.Close()
 
@@ -232,7 +261,7 @@ func handleKMSRotation(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 				break
 			}
 			if err != nil {
-				return nil, fmt.Errorf("gcp: kms.ListKeyRings(%s): %w", loc, err)
+				return nil, fmt.Errorf("listing keyrings in %s: %w", loc, err)
 			}
 			keyIt := client.ListCryptoKeys(ctx, &kmspb.ListCryptoKeysRequest{Parent: ring.Name})
 			for {
@@ -241,7 +270,7 @@ func handleKMSRotation(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 					break
 				}
 				if err != nil {
-					return nil, fmt.Errorf("gcp: kms.ListCryptoKeys: %w", err)
+					return nil, fmt.Errorf("listing cryptokeys for %s: %w", ring.Name, err)
 				}
 				compliant, reason := classifyCryptoKey(key, maxRotation)
 				out = append(out, resource{
@@ -254,7 +283,7 @@ func handleKMSRotation(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 						"purpose":                 key.Purpose.String(),
 					},
 				})
-				if len(out) > 5000 {
+				if len(out) >= maxResources {
 					break
 				}
 			}
@@ -265,7 +294,7 @@ func handleKMSRotation(ctx context.Context, ref plugin.EvidenceRef) (any, error)
 
 func classifyCryptoKey(key *kmspb.CryptoKey, maxRotation time.Duration) (bool, string) {
 	if key.Purpose != kmspb.CryptoKey_ENCRYPT_DECRYPT {
-		return true, ""
+		return false, fmt.Sprintf("purpose %s does not support automatic rotation; pair with policy_attestation evidence", key.Purpose.String())
 	}
 	period := key.GetRotationPeriod()
 	if period == nil {
@@ -290,16 +319,21 @@ func handleLogSink(ctx context.Context, ref plugin.EvidenceRef) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if items, ok := loadFixture(ref); ok {
+	items, ferr := loadFixture(ref)
+	if ferr != nil {
+		return nil, ferr
+	}
+	if items != nil {
 		return wrap(items, project), nil
 	}
 	client, err := logadmin.NewClient(ctx, project)
 	if err != nil {
-		return nil, fmt.Errorf("gcp: logadmin.NewClient: %w", err)
+		return nil, fmt.Errorf("creating logadmin client: %w", err)
 	}
 	defer client.Close()
 
 	out := []resource{}
+	covered := false
 	it := client.Sinks(ctx)
 	for {
 		s, err := it.Next()
@@ -307,40 +341,54 @@ func handleLogSink(ctx context.Context, ref plugin.EvidenceRef) (any, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("gcp: sinks.list: %w", err)
+			return nil, fmt.Errorf("listing log sinks: %w", err)
 		}
-		compliant, reason := classifySink(s.Destination, s.Filter)
+		compliant, reason, capturesAudit := classifySink(s.Destination, s.Filter)
+		if capturesAudit && compliant {
+			covered = true
+		}
 		out = append(out, resource{
 			FullName:  fmt.Sprintf("projects/%s/sinks/%s", project, s.ID),
 			Compliant: compliant,
 			Reason:    reason,
 			Detail: map[string]any{
-				"destination": s.Destination,
-				"filter":      s.Filter,
+				"destination":    s.Destination,
+				"filter":         s.Filter,
+				"captures_audit": capturesAudit,
 			},
 		})
-		if len(out) > 5000 {
+		if len(out) >= maxResources {
 			break
 		}
 	}
-	if len(out) == 0 {
-		out = append(out, resource{
-			FullName:  fmt.Sprintf("projects/%s/sinks", project),
-			Compliant: false,
-			Reason:    "no log sinks configured",
-		})
-	}
+	out = append(out, resource{
+		FullName:  fmt.Sprintf("projects/%s/sinks/_aggregate", project),
+		Compliant: covered,
+		Reason: func() string {
+			if covered {
+				return ""
+			}
+			return "no sink captures cloudaudit.googleapis.com logs"
+		}(),
+		Detail: map[string]any{
+			"sink_count":           len(out),
+			"audit_coverage_check": "CIS GCP 2.2",
+		},
+	})
 	return wrap(out, project), nil
 }
 
-func classifySink(destination, filter string) (bool, string) {
+func classifySink(destination, filter string) (bool, string, bool) {
 	if destination == "" {
-		return false, "sink destination is empty"
+		return false, "sink destination is empty", false
 	}
 	if filter == "" {
-		return true, ""
+		return true, "", true
 	}
-	return true, ""
+	if auditLogFilterRE.MatchString(filter) {
+		return true, "", true
+	}
+	return true, "", false
 }
 
 func publicAccessPreventionString(p storage.PublicAccessPrevention) string {
@@ -418,24 +466,27 @@ func wrap(items []resource, project string) map[string]any {
 	}
 }
 
-func loadFixture(ref plugin.EvidenceRef) ([]resource, bool) {
+func loadFixture(ref plugin.EvidenceRef) ([]resource, error) {
 	path := evidence.String(ref.Params, "fixture")
 	if path == "" {
 		root := os.Getenv(envFixture)
 		if root == "" {
-			return nil, false
+			return nil, nil
 		}
-		path = root + "/" + ref.Type + ".json"
+		path = filepath.Join(root, ref.Type+".json")
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return nil, false
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("reading fixture %s: %w", path, err)
 	}
 	var items []resource
 	if err := json.Unmarshal(raw, &items); err != nil {
-		return nil, false
+		return nil, fmt.Errorf("parsing fixture %s: %w", path, err)
 	}
-	return items, true
+	return items, nil
 }
 
 func main() {
