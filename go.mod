@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/kms v1.31.0
 	cloud.google.com/go/logging v1.18.0
 	cloud.google.com/go/storage v1.62.3
-	github.com/concord-dev/concord v0.0.0-00010101000000-000000000000
+	github.com/concord-dev/concord-plugin-sdk v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.283.0
 	google.golang.org/protobuf v1.36.11
@@ -66,9 +66,9 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto v0.0.0-20260319201613-d00831a3d3e7 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260523011958-0a33c5d7ca68 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260618152121-87f3d3e198d3 // indirect
 	google.golang.org/grpc v1.81.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/concord-dev/concord => ../concord
+replace github.com/concord-dev/concord-plugin-sdk => ../concord-plugin-sdk

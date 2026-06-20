@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	plugin "github.com/concord-dev/concord/pkg/plugin"
-	"github.com/concord-dev/concord/pkg/plugin/plugintest"
+	plugin "github.com/concord-dev/concord-plugin-sdk/plugin"
+	"github.com/concord-dev/concord-plugin-sdk/plugin/plugintest"
 )
 
 func TestCapabilities_AdvertisesEveryHandler(t *testing.T) {

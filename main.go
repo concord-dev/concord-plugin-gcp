@@ -22,8 +22,8 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	plugin "github.com/concord-dev/concord/pkg/plugin"
-	"github.com/concord-dev/concord/pkg/plugin/evidence"
+	plugin "github.com/concord-dev/concord-plugin-sdk/plugin"
+	"github.com/concord-dev/concord-plugin-sdk/plugin/evidence"
 )
 
 const (
