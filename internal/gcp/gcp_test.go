@@ -1,4 +1,4 @@
-package main
+package gcp
 
 import (
 	"context"
@@ -14,7 +14,7 @@ import (
 )
 
 func TestCapabilities_AdvertisesEveryHandler(t *testing.T) {
-	caps := plugin.NewSimpleAdapter(gcpCollector{}).Capabilities()
+	caps := plugin.NewSimpleAdapter(Collector{}).Capabilities()
 	assert.Equal(t, "gcp", caps.Source)
 	assert.Contains(t, caps.SupportedTypes, typeIAMBindings)
 	assert.Contains(t, caps.SupportedTypes, typeStorageIAM)
@@ -23,7 +23,7 @@ func TestCapabilities_AdvertisesEveryHandler(t *testing.T) {
 }
 
 func TestHandlers_RequireProjectParam(t *testing.T) {
-	c := gcpCollector{}
+	c := Collector{}
 	for _, h := range c.Handlers() {
 		_, err := h.Handle(context.Background(), plugin.EvidenceRef{Type: h.Type})
 		require.Error(t, err, "%s without params should error", h.Type)
@@ -47,9 +47,9 @@ func TestFixtureMode_ReturnsResourcesEnvelope(t *testing.T) {
 			},
 		},
 	}
-	plugintest.Run(t, gcpCollector{}, cases)
+	plugintest.Run(t, Collector{}, cases)
 
-	out, err := gcpCollector{}.Handlers()[1].Handle(context.Background(), plugin.EvidenceRef{
+	out, err := Collector{}.Handlers()[1].Handle(context.Background(), plugin.EvidenceRef{
 		Type:   typeStorageIAM,
 		Params: map[string]any{"project": "p1"},
 	})
@@ -64,13 +64,13 @@ func TestFixtureMode_ReturnsResourcesEnvelope(t *testing.T) {
 func TestProbe_PassesWithFixtureDir(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CONCORD_GCP_FIXTURE_DIR", dir)
-	plugintest.Probe(t, gcpCollector{}, nil)
+	plugintest.Probe(t, Collector{}, nil)
 }
 
 func TestProbe_FailsWithoutCredentials(t *testing.T) {
 	t.Setenv("CONCORD_GCP_FIXTURE_DIR", "")
 	t.Setenv(envCredentials, "")
-	err := gcpCollector{}.Probe(context.Background())
+	err := Collector{}.Probe(context.Background())
 	require.Error(t, err)
 }
 
@@ -109,7 +109,7 @@ func TestLoadFixture_FailsOnMalformedJSON(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "gcp_storage_bucket_iam.json"), []byte("{not json"), 0o644))
 	t.Setenv("CONCORD_GCP_FIXTURE_DIR", dir)
-	_, err := gcpCollector{}.Handlers()[1].Handle(context.Background(), plugin.EvidenceRef{
+	_, err := Collector{}.Handlers()[1].Handle(context.Background(), plugin.EvidenceRef{
 		Type:   typeStorageIAM,
 		Params: map[string]any{"project": "p1"},
 	})

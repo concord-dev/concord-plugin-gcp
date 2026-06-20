@@ -5,7 +5,7 @@ INSTALL_DIR := $(HOME)/.concord/plugins/gcp/$(VERSION)
 .PHONY: build install test clean
 
 build:
-	go build -o $(BIN) .
+	go build -o $(BIN) ./cmd/concord-plugin-gcp
 
 test:
 	go test ./... -count=1

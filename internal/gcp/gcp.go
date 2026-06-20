@@ -1,5 +1,5 @@
-// concord-plugin-gcp emits GCP IAM, GCS, KMS, and audit-log evidence for Concord.
-package main
+// Package gcp emits GCP IAM, GCS, KMS, and audit-log evidence for Concord.
+package gcp
 
 import (
 	"context"
@@ -54,12 +54,16 @@ var publicMembers = map[string]bool{
 
 var auditLogFilterRE = regexp.MustCompile(`(?i)logName\s*[:=]?\s*"?[^"\s]*cloudaudit\.googleapis\.com`)
 
-type gcpCollector struct{}
+// Collector emits GCP IAM, GCS, KMS, and audit-log evidence.
+type Collector struct{}
 
-func (gcpCollector) Source() string  { return source }
-func (gcpCollector) Version() string { return version }
+// New returns a GCP collector.
+func New() *Collector { return &Collector{} }
 
-func (gcpCollector) Probe(ctx context.Context) error {
+func (Collector) Source() string  { return source }
+func (Collector) Version() string { return version }
+
+func (Collector) Probe(ctx context.Context) error {
 	if os.Getenv(envFixture) != "" {
 		return nil
 	}
@@ -76,7 +80,7 @@ func (gcpCollector) Probe(ctx context.Context) error {
 	return nil
 }
 
-func (gcpCollector) Handlers() []plugin.TypeHandler {
+func (Collector) Handlers() []plugin.TypeHandler {
 	return []plugin.TypeHandler{
 		{Type: typeIAMBindings, Description: "IAM allow-policy bindings for a project; flags public + primitive-role grants", Handle: handleIAMBindings},
 		{Type: typeStorageIAM, Description: "GCS bucket IAM + PublicAccessPrevention + UBLA", Handle: handleStorageIAM},
@@ -487,18 +491,4 @@ func loadFixture(ref plugin.EvidenceRef) ([]resource, error) {
 		return nil, fmt.Errorf("parsing fixture %s: %w", path, err)
 	}
 	return items, nil
-}
-
-func main() {
-	plugin.ServeSimple(gcpCollector{},
-		plugin.WithDocs("https://github.com/concord-dev/concord-plugin-gcp"),
-		plugin.WithOptionalEnv(envCredentials, envFixture),
-		plugin.WithPermissions(plugin.Permissions{Network: []string{
-			"cloudresourcemanager.googleapis.com",
-			"storage.googleapis.com",
-			"cloudkms.googleapis.com",
-			"logging.googleapis.com",
-			"oauth2.googleapis.com",
-		}}),
-	)
 }
