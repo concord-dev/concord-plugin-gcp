@@ -201,7 +201,7 @@ func handleStorageIAM(ctx context.Context, ref plugin.EvidenceRef) (any, error) 
 func bucketIAMMembers(ctx context.Context, client *storage.Client, bucket string) ([]string, error) {
 	policy, err := client.Bucket(bucket).IAM().V3().Policy(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getting IAM policy for bucket %s: %w", bucket, err)
 	}
 	seen := map[string]bool{}
 	var members []string
