@@ -1,0 +1,77 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/concord-dev/concord-plugin-gcp
+
+# The plugin SDK is consumed as a published module, so this is a clean
+# single-repo checkout that fetches it from the proxy — no sibling checkout,
+# no replace directive.
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.11'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Build linux/amd64
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags="-s -w" -o dist/concord-plugin-gcp ./cmd/concord-plugin-gcp
+
+      - uses: oras-project/setup-oras@v1
+        with:
+          version: 1.2.0
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: v2.4.0
+
+      - name: Login to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | oras login -u ${{ github.actor }} --password-stdin "${REGISTRY}"
+
+      - name: Push OCI artifact
+        id: push
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF#refs/tags/}"
+          oras push "${IMAGE}:${TAG}" \
+            --artifact-type application/vnd.concord.plugin.v1 \
+            --annotation "org.concord.dev.artifact.kind=plugin" \
+            --annotation "org.concord.dev.plugin.source=gcp" \
+            --annotation "org.concord.dev.plugin.protocol=v1" \
+            --annotation "org.opencontainers.image.title=concord-plugin-gcp" \
+            --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --annotation "org.opencontainers.image.version=${TAG}" \
+            dist/concord-plugin-gcp:application/vnd.concord.plugin.binary.v1
+          DIGEST="$(oras resolve "${IMAGE}:${TAG}")"
+          echo "tag=${TAG}"     >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Cosign sign (keyless)
+        run: |
+          cosign sign --yes "${IMAGE}@${{ steps.push.outputs.digest }}"
+
+      - name: Verify signature
+        run: |
+          cosign verify \
+            --certificate-identity-regexp "^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/.*@refs/tags/.*$" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE}@${{ steps.push.outputs.digest }}"
