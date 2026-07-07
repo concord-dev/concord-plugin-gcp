@@ -6,7 +6,7 @@ require (
 	cloud.google.com/go/kms v1.31.0
 	cloud.google.com/go/logging v1.18.0
 	cloud.google.com/go/storage v1.62.3
-	github.com/concord-dev/concord-plugin-sdk v0.0.0-00010101000000-000000000000
+	github.com/concord-dev/concord-plugin-sdk v0.1.0
 	github.com/stretchr/testify v1.11.1
 	google.golang.org/api v0.283.0
 	google.golang.org/protobuf v1.36.11
@@ -70,5 +70,3 @@ require (
 	google.golang.org/grpc v1.81.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/concord-dev/concord-plugin-sdk => ../concord-plugin-sdk
